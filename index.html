@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="icon.png">
+    <link rel="canonical" href="index.html">
+    <title>ChainScope: 区块链交易解析工具</title>
+
+    <!-- CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.7.2/styles/atom-one-light.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+    
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="content-wrapper">
+        <header>
+            <nav class="navbar navbar-expand-lg">
+                <div class="container">
+                    <a class="navbar-brand d-flex align-items-center" href="#">
+                        <i class="fas fa-search-dollar me-2"></i>ChainScope
+                    </a>
+                    <button id="themeToggle" class="btn btn-outline-success">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                </div>
+            </nav>
+        </header>
+
+        <main>
+            <div class="container">
+                <div class="section mx-auto">
+                    <div class="custom-form">
+                        <div class="text-center mb-5">
+                            <div class="logo-container mb-3">
+                                <i class="fas fa-search-dollar fa-3x text-success"></i>
+                            </div>
+                            <h1 class="display-5 fw-bold">区块链交易解析工具</h1>
+                            <p class="text-muted">一键解析多链交易数据，自动生成调用代码</p>
+                        </div>
+                        
+                        <!-- 添加ETH主网选项 -->
+                        <div class="form-group mb-4">
+                            <label class="form-label mb-2">选择网络</label>
+                            <select id="networkSelect" class="form-select form-select-lg">
+                                <option value="https://mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161">
+                                    <i class="fab fa-ethereum"></i> Ethereum
+                                </option>
+                                <option value="https://mainnet.era.zksync.io">
+                                    <i class="fas fa-bolt"></i> zkSync Era
+                                </option>
+                                <option value="https://bsc-dataseed1.binance.org">
+                                    <i class="fas fa-coins"></i> BSC
+                                </option>
+                                <option value="https://mainnet.base.org">
+                                    <i class="fas fa-layer-group"></i> Base
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="form-group mb-5">
+                            <label class="form-label mb-2">交易哈希</label>
+                            <div class="input-group input-group-lg">
+                                <span class="input-group-text bg-light">
+                                    <i class="fas fa-hashtag"></i>
+                                </span>
+                                <input type="text" id="txHash" class="form-control" 
+                                       placeholder="输入交易哈希...">
+                                
+                                                                <button id="decodeButton" class="btn btn-success px-4" onclick="decodeTx()">
+                                                                    <i class="fas fa-code me-2"></i>解析交易
+                                                                </button>
+                            </div>
+                            <div class="form-text mt-2">
+                                <i class="fas fa-info-circle me-1"></i> 支持多链交易解析，自动识别合约调用
+                            </div>
+                        </div>
+
+                        <div id="loadingIndicator" class="text-center my-5 d-none">
+                            <div class="spinner-grow text-success" role="status">
+                                <span class="visually-hidden">解析中...</span>
+                            </div>
+                            <p class="mt-3 text-muted">正在解析交易数据...</p>
+                        </div>
+
+                        <div class="results-wrapper">
+                            <div id="decodedTransactionContainer" class="transaction-details mb-4 d-none">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h3 class="h4 mb-0">
+                                        <i class="fas fa-file-code me-2"></i>解码结果
+                                    </h3>
+                                    <button id="copyButton" class="btn btn-outline-success btn-sm" 
+                                            data-clipboard-target="#result">
+                                        <i class="fas fa-copy me-2"></i>复制
+                                    </button>
+                                </div>
+                                <div id="result" class="result-content"></div>
+                            </div>
+
+                            <div id="generatedCodeContainer" class="transaction-details d-none">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h3 class="h4 mb-0">
+                                        <i class="fab fa-python me-2"></i>Python 代码
+                                    </h3>
+                                    <button id="copyCodeButton" class="btn btn-outline-success btn-sm" 
+                                            data-clipboard-target="#output">
+                                        <i class="fas fa-copy me-2"></i>复制代码
+                                    </button>
+                                </div>
+                                <div id="output" class="code-content"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="success-alert" class="toast align-items-center text-white bg-success border-0" role="alert">
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fas fa-check-circle me-2"></i>
+                <span id="alert-message"></span>
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.11/clipboard.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.7.2/highlight.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js" defer></script>
+    <script src="script.js" defer></script>
+</body>
+</html>
