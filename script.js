@@ -3,13 +3,35 @@ async function ensureEthersLoaded() {
     if (typeof ethers === 'undefined') {
         return new Promise((resolve, reject) => {
             const script = document.createElement('script');
-            script.src = 'https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js';
-            script.onload = () => resolve();
+            // 使用最新的 ethers v6 版本
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js';
+            script.type = 'text/javascript';
+            script.onload = () => {
+                // 确保 ethers 完全加载
+                setTimeout(resolve, 100);
+            };
             script.onerror = () => reject(new Error('Failed to load ethers.js'));
             document.head.appendChild(script);
         });
     }
-    return Promise.resolve();
+    return new Promise(resolve => {
+        // 即使 ethers 已存在也等待一下确保完全加载
+        setTimeout(resolve, 100);
+    });
+}
+
+// 显示加载动画
+function showLoading() {
+    document.getElementById('loadingIndicator').classList.remove('d-none');
+    document.getElementById('decodeButton').disabled = true;
+    document.getElementById('decodeButton').innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>处理中...';
+}
+
+// 隐藏加载动画
+function hideLoading() {
+    document.getElementById('loadingIndicator').classList.add('d-none');
+    document.getElementById('decodeButton').disabled = false;
+    document.getElementById('decodeButton').innerHTML = '<i class="fas fa-code me-2"></i>解析交易';
 }
 
 // 从 4byte API 获取函数签名
@@ -30,17 +52,31 @@ async function getFunctionSignatureFrom4ByteAPI(hash) {
 
 // 获取交易信息
 async function getTransaction(rpcProviderUrl, txHash) {
-    const response = await fetch(rpcProviderUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'eth_getTransactionByHash',
-            params: [txHash],
-            id: 1
-        })
-    });
-    return await response.json();
+    try {
+        // 移除 no-cors 模式，使用标准模式
+        const response = await fetch(rpcProviderUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'eth_getTransactionByHash',
+                params: [txHash],
+                id: 1
+            })
+        });
+
+        if (!response.ok) {
+            console.error(`HTTP error: ${response.status}`);
+            throw new Error(`HTTP error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Response data:', data);
+        return data;
+    } catch (error) {
+        console.error('Transaction fetch error:', error);
+        throw new Error(`Failed to fetch transaction: ${error.message}`);
+    }
 }
 
 // 生成 Python 代码
@@ -82,9 +118,11 @@ async function decodeTx() {
         const txHash = document.getElementById('txHash').value.trim();
         const rpcUrl = document.getElementById('networkSelect').value;
         
+        console.log('Decoding transaction:', txHash, 'on network:', rpcUrl);
+        
         const transaction = await getTransaction(rpcUrl, txHash);
-        if (!transaction.result) {
-            throw new Error('Transaction not found');
+        if (!transaction || !transaction.result) {
+            throw new Error('Transaction not found or invalid response');
         }
 
         updateHTMLContent('result', JSON.stringify(transaction.result, null, 2));
@@ -106,6 +144,7 @@ async function decodeTx() {
             }
         }
     } catch (error) {
+        console.error('Error decoding transaction:', error);
         updateHTMLContent('result', `Error: ${error.message}`);
     } finally {
         hideLoading();
