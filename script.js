@@ -1,60 +1,60 @@
-// Ethers.js 
+
 async function ensureEthersLoaded() {
     if (typeof ethers === 'undefined') {
         return new Promise((resolve, reject) => {
             const script = document.createElement('script');
-            // 使用最新的 ethers v6 版本
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js';
-            script.type = 'text/javascript';
-            script.onload = () => {
-                // 确保 ethers 完全加载
-                setTimeout(resolve, 100);
-            };
+            script.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+            script.onload = () => setTimeout(resolve, 100);
             script.onerror = () => reject(new Error('Failed to load ethers.js'));
             document.head.appendChild(script);
         });
     }
-    return new Promise(resolve => {
-        // 即使 ethers 已存在也等待一下确保完全加载
-        setTimeout(resolve, 100);
-    });
+    return Promise.resolve();
 }
 
-// 显示加载动画
+
 function showLoading() {
     document.getElementById('loadingIndicator').classList.remove('d-none');
     document.getElementById('decodeButton').disabled = true;
     document.getElementById('decodeButton').innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>处理中...';
 }
 
-// 隐藏加载动画
+
 function hideLoading() {
     document.getElementById('loadingIndicator').classList.add('d-none');
     document.getElementById('decodeButton').disabled = false;
     document.getElementById('decodeButton').innerHTML = '<i class="fas fa-code me-2"></i>解析交易';
 }
 
-// 从 4byte API 获取函数签名
-async function getFunctionSignatureFrom4ByteAPI(hash) {
-    const url = `https://www.4byte.directory/api/v1/signatures/?format=json&hex_signature=${hash}`;
-    const response = await fetch(url);
 
-    if (!response.ok) {
-        throw new Error('Signature not found');
-    }
-
-    const data = await response.json();
-    if (data.results && data.results.length > 0) {
-        return data.results[data.results.length - 1].text_signature;
-    }
-    throw new Error('No signature found in the response');
+async function fetchWithTimeout(url, options, timeout = 5000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
 }
 
-// 获取交易信息
+
+const signatureCache = new Map();
+async function getFunctionSignatureFrom4ByteAPI(hash) {
+    if (signatureCache.has(hash)) return signatureCache.get(hash);
+    const url = `https://www.4byte.directory/api/v1/signatures/?format=json&hex_signature=${hash}`;
+    const response = await fetchWithTimeout(url);
+    if (!response.ok) throw new Error('Signature not found');
+    const data = await response.json();
+    if (data.results && data.results.length > 0) {
+        const sig = data.results[data.results.length - 1].text_signature;
+        signatureCache.set(hash, sig);
+        return sig;
+    }
+    throw new Error('No signature found');
+}
+
+
 async function getTransaction(rpcProviderUrl, txHash) {
     try {
-        // 移除 no-cors 模式，使用标准模式
-        const response = await fetch(rpcProviderUrl, {
+        const response = await fetchWithTimeout(rpcProviderUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -64,43 +64,33 @@ async function getTransaction(rpcProviderUrl, txHash) {
                 id: 1
             })
         });
-
-        if (!response.ok) {
-            console.error(`HTTP error: ${response.status}`);
-            throw new Error(`HTTP error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log('Response data:', data);
-        return data;
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return await response.json();
     } catch (error) {
-        console.error('Transaction fetch error:', error);
         throw new Error(`Failed to fetch transaction: ${error.message}`);
     }
 }
 
-// 生成 Python 代码
+
 function generatePythonCode(functionName, toAddress, abiInputs, value) {
     const paramDefs = abiInputs.map((input, index) => 
-        `param_${input.type.replace(/[^a-zA-Z0-9]/g, '_')}_${index + 1}: ${input.type}`).join(', ');
-    
+        `${input.name || `param_${input.type}_${index + 1}`}: ${input.type}`).join(', ');
     const paramCalls = abiInputs.map((input, index) => 
-        `param_${input.type.replace(/[^a-zA-Z0-9]/g, '_')}_${index + 1}`).join(', ');
-
+        input.name || `param_${input.type}_${index + 1}`).join(', ');
     return `from web3 import Web3
 from typing import Any
 
-def ${functionName}(web3: Web3, ${paramDefs}) -> Any:
+def ${functionName}(web3: Web3${paramDefs ? ', ' + paramDefs : ''}) -> Any:
     contract_address = '${toAddress}'
     to_address = web3.to_checksum_address(contract_address)
     
     abi = [{
-        "constant": ${value > 0 ? 'True' : 'False'},
-        "inputs": [${abiInputs.map(JSON.stringify).join(', ')}],
+        "constant": false,
+        "inputs": [${abiInputs.map(input => JSON.stringify({ name: input.name || '', type: input.type })).join(', ')}],
         "name": "${functionName}",
         "outputs": [],
-        "payable": ${value > 0 ? 'True' : 'False'},
-        "stateMutability": "${value > 0 ? 'payable' : 'nonpayable'}",
+        "payable": ${value !== '0x0' && value !== '0' ? 'True' : 'False'},
+        "stateMutability": "${value !== '0x0' && value !== '0' ? 'payable' : 'nonpayable'}",
         "type": "function"
     }]
     
@@ -110,7 +100,18 @@ def ${functionName}(web3: Web3, ${paramDefs}) -> Any:
 `;
 }
 
-// 主要解码函数
+
+function decodeInputData(input, signature) {
+    const iface = new ethers.utils.Interface([`function ${signature}`]);
+    const decoded = iface.parseTransaction({ data: input });
+    return decoded.functionFragment.inputs.map((input, index) => ({
+        name: input.name || `param_${index + 1}`,
+        type: input.type,
+        value: decoded.args[index].toString()
+    }));
+}
+
+
 async function decodeTx() {
     showLoading();
     try {
@@ -118,12 +119,8 @@ async function decodeTx() {
         const txHash = document.getElementById('txHash').value.trim();
         const rpcUrl = document.getElementById('networkSelect').value;
         
-        console.log('Decoding transaction:', txHash, 'on network:', rpcUrl);
-        
         const transaction = await getTransaction(rpcUrl, txHash);
-        if (!transaction || !transaction.result) {
-            throw new Error('Transaction not found or invalid response');
-        }
+        if (!transaction || !transaction.result) throw new Error('Transaction not found or invalid response');
 
         updateHTMLContent('result', JSON.stringify(transaction.result, null, 2));
         
@@ -131,36 +128,28 @@ async function decodeTx() {
             const functionSig = transaction.result.input.slice(0, 10);
             try {
                 const signature = await getFunctionSignatureFrom4ByteAPI(functionSig);
+                const functionName = signature.split('(')[0];
+                const abiInputs = decodeInputData(transaction.result.input, signature);
                 const pythonCode = generatePythonCode(
-                    signature.split('(')[0],
-                    transaction.result.to,
-                    [], 
+                    functionName,
+                    transaction.result.to, // 修复：确保使用交易中的to地址
+                    abiInputs,
                     transaction.result.value || '0'
                 );
                 updateHTMLContent('output', pythonCode);
                 showResults();
             } catch (error) {
-                console.warn('Failed to get function signature:', error);
+                console.warn('Failed to decode input or get signature:', error);
+                updateHTMLContent('output', `Error decoding input: ${error.message}`);
             }
         }
     } catch (error) {
-        console.error('Error decoding transaction:', error);
         updateHTMLContent('result', `Error: ${error.message}`);
     } finally {
         hideLoading();
     }
 }
 
-// 辅助函数
-function showLoading() {
-    document.getElementById('loadingIndicator').classList.remove('d-none');
-    document.getElementById('decodeButton').disabled = true;
-}
-
-function hideLoading() {
-    document.getElementById('loadingIndicator').classList.add('d-none');
-    document.getElementById('decodeButton').disabled = false;
-}
 
 function showResults() {
     document.getElementById('generatedCodeContainer').classList.remove('d-none');
@@ -169,75 +158,33 @@ function showResults() {
 
 function updateHTMLContent(elementId, content) {
     const element = document.getElementById(elementId);
-    
-    // 根据内容类型进行格式化
     if (elementId === 'result') {
         try {
-            // 格式化 JSON 数据
             const formattedJson = JSON.parse(content);
-            const formattedContent = formatTransactionData(formattedJson);
-            element.innerHTML = `<pre><code class="language-json">${formattedContent}</code></pre>`;
+            element.innerHTML = `<pre><code class="language-json">${JSON.stringify(formattedJson, null, 2)}</code></pre>`;
             hljs.highlightElement(element.querySelector('code'));
         } catch (e) {
             element.innerHTML = `<pre><code class="language-plaintext">${content}</code></pre>`;
         }
     } else if (elementId === 'output') {
-        // Python 代码格式化
         element.innerHTML = `<pre><code class="language-python">${content}</code></pre>`;
         hljs.highlightElement(element.querySelector('code'));
     }
-
-    element.style.opacity = '0';
     element.parentElement.classList.remove('d-none');
-
-    setTimeout(() => {
-        element.style.transition = 'opacity 0.5s ease';
-        element.style.opacity = '1';
-    }, 10);
 }
 
-// 格式化函数
-function formatTransactionData(data) {
-    // 格式化 wei 到 ether
-    if (data.value) {
-        const valueInWei = BigInt(data.value);
-        const valueInEther = Number(valueInWei) / 1e18;
-        data.valueFormatted = `${valueInEther} ETH (${data.value} Wei)`;
-    }
 
-    // 格式化 gas 相关数据
-    if (data.gas) {
-        data.gasFormatted = `${parseInt(data.gas, 16)} (0x${data.gas.slice(2)})`;
-    }
-    if (data.gasPrice) {
-        const gasPriceWei = BigInt(data.gasPrice);
-        const gasPriceGwei = Number(gasPriceWei) / 1e9;
-        data.gasPriceFormatted = `${gasPriceGwei} Gwei (${data.gasPrice})`;
-    }
-
-    // 添加区块确认信息
-    if (data.blockNumber) {
-        data.blockNumberFormatted = `${parseInt(data.blockNumber, 16)} (0x${data.blockNumber.slice(2)})`;
-    }
-
-    return JSON.stringify(data, null, 2)
-        .replace(/"([^"]+)":/g, '<span class="json-key">"$1":</span>');
-}
-
-// 主题切换相关函数
 function setupThemeToggle() {
     const currentTheme = localStorage.getItem('theme') || 'light';
     if (currentTheme === 'dark') {
         document.body.classList.add('dark-mode');
         updateCodeHighlightTheme('dark');
     }
-
     document.getElementById('themeToggle').addEventListener('click', function() {
         document.body.classList.toggle('dark-mode');
         const newTheme = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
         localStorage.setItem('theme', newTheme);
         updateCodeHighlightTheme(newTheme);
-        
         const icon = this.querySelector('i');
         icon.classList.toggle('fa-moon');
         icon.classList.toggle('fa-sun');
@@ -253,49 +200,30 @@ function updateCodeHighlightTheme(theme) {
     }
 }
 
-// 复制功能
-var clipboard = new ClipboardJS('#copyButton');
-var codeClipboard = new ClipboardJS('#copyCodeButton');
 
-clipboard.on('success', function(e) {
-    showSuccessAlert('解析结果已复制到剪贴板！');
-    e.clearSelection();
-});
-
-codeClipboard.on('success', function(e) {
-    showSuccessAlert('Python代码已复制到剪贴板！');
-    e.clearSelection();
-});
+const clipboard = new ClipboardJS('#copyButton');
+const codeClipboard = new ClipboardJS('#copyCodeButton');
+clipboard.on('success', e => showSuccessAlert('解析结果已复制到剪贴板！'));
+codeClipboard.on('success', e => showSuccessAlert('Python代码已复制到剪贴板！'));
 
 function showSuccessAlert(message) {
     const alert = document.getElementById('success-alert');
-    if (!alert) return;
-    
-    const alertMessage = document.getElementById('alert-message');
-    if (alertMessage) alertMessage.textContent = message;
-    
+    document.getElementById('alert-message').textContent = message;
     alert.style.display = 'block';
-    alert.classList.add('fade-in');
-    
-    setTimeout(() => {
-        alert.style.opacity = '0';
-        setTimeout(() => {
-            alert.style.display = 'none';
-            alert.style.opacity = '1';
-            alert.classList.remove('fade-in');
-        }, 500);
-    }, 3000);
+    setTimeout(() => alert.style.display = 'none', 3000);
 }
 
-// 初始化
+
 window.onload = function() {
     setupThemeToggle();
-    
-    // 添加交易哈希输入框清空功能
-    const txHashInput = document.getElementById('txHash');
-    if (txHashInput) {
-        txHashInput.addEventListener('focus', function() {
-            this.value = '';
-        });
-    }
+    document.getElementById('decodeButton').addEventListener('click', debounce(decodeTx, 500));
+    document.getElementById('txHash').addEventListener('focus', function() { this.value = ''; });
 };
+
+function debounce(fn, delay) {
+    let timeout;
+    return (...args) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn(...args), delay);
+    };
+}
